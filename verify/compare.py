@@ -73,6 +73,12 @@ def check_results(output_dir="./output"):
         print(f"❌ FAIL: {match_count}/{len(expected)} matches.")
 
 def verify_m1(output_dir="./output"):
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--gen", action="store_true", help="Force generate new test vectors")
+    parser.add_argument("--check", action="store_true", help="Only check existing simulation results")
+    args, _ = parser.parse_known_args()
+
     print("--- [Stage 4: Verify] ---")
     
     # Step 1: Check files
@@ -81,8 +87,18 @@ def verify_m1(output_dir="./output"):
         print("❌ model_ir.json not found. Run convert.py first.")
         return
 
-    # Step 2: Generate test vectors
-    generate_test_vectors(output_dir)
+    testvec_dir = os.path.join(output_dir, "testvectors")
+    input_hex = os.path.join(testvec_dir, "input.hex")
+
+    if args.check:
+        check_results(output_dir)
+        return
+
+    # Step 2: Generate test vectors if forced or missing
+    if args.gen or not os.path.exists(input_hex):
+        generate_test_vectors(output_dir)
+    else:
+        print("[Verify] Using existing test vectors.")
     
     # Step 3: Check for simulation output
     check_results(output_dir)

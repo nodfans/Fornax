@@ -13,22 +13,22 @@ module matmul #(
 )(
     input wire clk,
     input wire rst_n,
-    input wire [7:0] in_data,
+    input wire signed [7:0] in_data,
     input wire in_valid,
-    output reg [31:0] out_data,
+    output reg signed [31:0] out_data,
     output reg out_valid
 );
 
-    // Weight Storage
-    reg [7:0] weight_rom [0:IN_FEATURES*OUT_FEATURES-1];
+    // Weight Storage - Explicitly SIGNED
+    reg signed [7:0] weight_rom [0:IN_FEATURES*OUT_FEATURES-1];
     initial begin
         $readmemh(WEIGHT_FILE, weight_rom);
     end
 
     // Control Logic
-    reg [15:0] in_count;   // Tracks which input feature we are currently receiving
-    reg [15:0] out_count;  // Tracks which output feature we are currently calculating
-    reg [31:0] acc;
+    reg [15:0] in_count;   
+    reg [15:0] out_count;  
+    reg signed [31:0] acc;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -40,16 +40,10 @@ module matmul #(
         end else begin
             out_valid <= 0;
             if (in_valid) begin
-                // Parallel-Serial MAC: For each in_data, we multiply with current weight
-                // Note: This is an extremely simplified version for M1
-                // We assume input is streamed IN_FEATURES times for EACH output feature?
-                // No, let's assume input is streamed ONCE, and we have OUT_FEATURES accumulators?
-                // For M1 simplicity, let's do: 1 input vector in, 1 output element at a time.
-                
-                acc <= acc + ($signed(in_data) * $signed(weight_rom[out_count * IN_FEATURES + in_count]));
-                
+                // Simple Serial MAC logic
                 if (in_count == IN_FEATURES - 1) begin
                     in_count <= 0;
+                    // Final sum for this output element
                     out_data <= acc + ($signed(in_data) * $signed(weight_rom[out_count * IN_FEATURES + in_count]));
                     out_valid <= 1;
                     acc <= 0;
@@ -58,6 +52,7 @@ module matmul #(
                     else
                         out_count <= out_count + 1;
                 end else begin
+                    acc <= acc + ($signed(in_data) * $signed(weight_rom[out_count * IN_FEATURES + in_count]));
                     in_count <= in_count + 1;
                 end
             end
