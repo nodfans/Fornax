@@ -51,3 +51,5 @@ xsim.dir/
 *.pth
 *.bin
 /weights/
+
+Context.md
