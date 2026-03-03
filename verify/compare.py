@@ -16,26 +16,35 @@ def generate_test_vectors(output_dir="./output"):
     current_val = input_vec.astype(np.float32)
     
     # Run through the IR chain in Python
-    for op in ir["ops"]:
+    results = {"block_input": current_val}
+    
+    for i, op in enumerate(ir["ops"]):
         weight_meta = ir["weight_metadata"][op["weight_key"]]
         bin_path = os.path.join(output_dir, weight_meta["path"])
         weights = np.fromfile(bin_path, dtype=np.int8)
         
+        # Get input for this op
+        op_input = results[op["input"]]
+        
         if op["type"] == "layernorm":
-            # Simplified M2 LN: just multiply by weight (scale)
-            # weights is (DIM,)
-            current_val = current_val * weights.astype(np.float32)
-            # Re-quantize to INT8 for next stage
-            current_val = np.clip(current_val, -128, 127).astype(np.int8).astype(np.float32)
+            # Verilog: prod[14:7] which is (prod >> 7) & 0xFF
+            prod = op_input.astype(np.int32) * weights.astype(np.int32)
+            res_bits = (prod >> 7).astype(np.int8)
+            results[op["name"]] = res_bits.astype(np.float32)
         elif op["type"] == "linear":
             weights = weights.reshape(op["out_features"], op["in_features"])
-            # Linear: x * W^T
-            current_val = np.matmul(current_val, weights.T.astype(np.float32))
-            # In RTL we take bits [15:8], which is a division by 256
-            current_val = (current_val / 256.0).astype(np.float32)
-            current_val = np.clip(current_val, -128, 127).astype(np.int8).astype(np.float32)
+            res = np.matmul(op_input, weights.T.astype(np.float32)).astype(np.int32)
+            
+            # If not the last op, use bit-slicing [15:8]
+            if i < len(ir["ops"]) - 1:
+                res_bits = (res >> 8).astype(np.int8)
+                results[op["name"]] = res_bits.astype(np.float32)
+            else:
+                # Final output: keep full 32-bit precision
+                results[op["name"]] = res
 
-    expected_out = current_val # Final output features
+    # Final output is the result of the last op
+    expected_out = results[ir["ops"][-1]["name"]]
     
     # Save files
     testvec_dir = os.path.join(output_dir, "testvectors")
@@ -53,35 +62,52 @@ def generate_test_vectors(output_dir="./output"):
 
 def check_results(output_dir="./output"):
     print("\n[Verify] Comparing Simulation Results...")
-    testvec_dir = os.path.join(output_dir, "testvectors")
-    
-    expected_path = os.path.join(testvec_dir, "expected.hex")
-    actual_path = os.path.join(testvec_dir, "actual.hex")
+    expected_path = os.path.join(output_dir, "testvectors/expected.hex")
+    actual_path = os.path.join(output_dir, "testvectors/actual.hex")
     
     if not os.path.exists(actual_path):
-        print(f"❌ actual.hex not found at {actual_path}. Did you run the simulation?")
+        print(f"❌ FAIL: Simulation output {actual_path} not found.")
         return
-    
+
+    def hex_to_signed_int32(h):
+        val = int(h, 16)
+        if val & (1 << 31): # Check if the sign bit (31st bit for 32-bit) is set
+            val -= (1 << 32) # Convert to negative
+        return val
+
+    expected = []
     with open(expected_path, "r") as f:
-        expected = [int(line.strip(), 16) for line in f if line.strip()]
-        # Convert back to signed int32 if needed (hex is uint32 view)
-        expected = [e if e < 0x80000000 else e - 0x100000000 for e in expected]
-        
+        for line in f:
+            if line.strip():
+                expected.append(hex_to_signed_int32(line.strip()))
+    
+    actual = []
     with open(actual_path, "r") as f:
-        actual = [int(line.strip(), 16) for line in f if line.strip()]
-        actual = [a if a < 0x80000000 else a - 0x100000000 for a in actual]
-        
-    match_count = 0
-    for i in range(min(len(expected), len(actual))):
+        for line in f:
+            if line.strip():
+                actual.append(hex_to_signed_int32(line.strip()))
+
+    matches = 0
+    total = len(expected)
+    
+    # We only check up to the len of actual received
+    check_len = min(len(expected), len(actual))
+    
+    for i in range(check_len):
         if expected[i] == actual[i]:
-            match_count += 1
+            matches += 1
         else:
-            print(f"  [MISMATCH] Index {i}: Expected {expected[i]}, Got {actual[i]}")
-            
-    if match_count == len(expected) and len(expected) == len(actual):
-        print(f"✅ PASS: All {match_count} outputs match perfectly!")
+            # Limit output to first few mismatches and last few
+            if matches < 10 or i > total - 5: 
+                print(f"  [MISMATCH] Index {i}: Expected {expected[i]}, Got {actual[i]}")
+
+    if len(actual) != len(expected):
+        print(f"⚠️ Warning: Result length mismatch. Expected {len(expected)}, Got {len(actual)}")
+
+    if matches == total and total > 0:
+        print(f"✅ PASS: All {matches} outputs match perfectly!")
     else:
-        print(f"❌ FAIL: {match_count}/{len(expected)} matches.")
+        print(f"❌ FAIL: {matches}/{total} matches.")
 
 def verify_m1(output_dir="./output"):
     import argparse

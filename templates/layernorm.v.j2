@@ -31,9 +31,10 @@ module layernorm #(
         end else begin
             out_valid <= 0;
             if (in_valid) begin
-                // Simplified LN: just scale by weight
-                // In M3 we'll add the full (x-mean)/sqrt(var+eps)
-                out_data <= $signed(in_data) * $signed(weight_rom[count]); 
+                // Simplified LN: scale by weight and shift to stay in 8-bit
+                // (in_data * weight) >> 7 (approx divide by 128)
+                wire signed [15:0] prod = $signed(in_data) * $signed(weight_rom[count]);
+                out_data <= prod[14:7]; 
                 out_valid <= 1;
                 
                 if (count == DIM - 1)

@@ -202,11 +202,13 @@ class ModelParser:
                         "type":    "layernorm",
                         "name":    "input_layernorm",
                         "weight":  f"model_layers_{i}_input_layernorm_weight",
+                        "dim":     cfg.hidden_size,
                     },
                     {
                         "type":    "layernorm",
                         "name":    "post_attention_layernorm",
                         "weight":  f"model_layers_{i}_post_attention_layernorm_weight",
+                        "dim":     cfg.hidden_size,
                     },
                     {
                         "type":    "linear",

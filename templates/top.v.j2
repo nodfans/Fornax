@@ -25,7 +25,8 @@ module fornax_layer0 (
     
     // Width adaptation: Linear output is 32-bit, but next stages (LN/Linear) expect 8-bit.
     // In M2, we take bits [15:8] as a simple quantization/scaling 
-    wire signed [7:0] {{ op.name }}_in_vec_8 = ({{ op.input == "block_input" or "layernorm" in op.input }}) ? {{ input_sig }}[7:0] : {{ input_sig }}[15:8];
+    {% set is_initial = 1 if (op.input == "block_input" or "layernorm" in op.input) else 0 %}
+    wire signed [7:0] {{ op.name }}_in_vec_8 = ({{ is_initial }}) ? {{ input_sig }}[7:0] : {{ input_sig }}[15:8];
 
     {% if op.type == "layernorm" %}
     layernorm #(

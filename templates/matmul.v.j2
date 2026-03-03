@@ -22,40 +22,79 @@ module matmul #(
     // Weight Storage - Explicitly SIGNED
     reg signed [7:0] weight_rom [0:IN_FEATURES*OUT_FEATURES-1];
     initial begin
-        $readmemh(WEIGHT_FILE, weight_rom);
+        if (WEIGHT_FILE != "") $readmemh(WEIGHT_FILE, weight_rom);
     end
 
     // Control Logic
-    reg [15:0] in_count;   
-    reg [15:0] out_count;  
     reg signed [31:0] acc;
+    // Internal Buffer for the input vector
+    reg signed [7:0] input_buffer [0:IN_FEATURES-1];
+    reg [15:0] in_count;       // Used for buffering input
+    reg [15:0] out_feat_count; // Iterates through output features
+    reg [15:0] mac_count;      // Iterates through MACs for a single output feature
+    reg [1:0] state;           // 0: Idle/Capture, 1: Processing
 
+    // State Machine
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            in_count <= 0;
-            out_count <= 0;
             acc <= 0;
+            in_count <= 0;
+            out_feat_count <= 0;
+            mac_count <= 0;
+            state <= 0;
             out_data <= 0;
             out_valid <= 0;
         end else begin
-            out_valid <= 0;
-            if (in_valid) begin
-                // Simple Serial MAC logic
-                if (in_count == IN_FEATURES - 1) begin
-                    in_count <= 0;
-                    // Final sum for this output element
-                    out_data <= acc + ($signed(in_data) * $signed(weight_rom[out_count * IN_FEATURES + in_count]));
-                    out_valid <= 1;
-                    acc <= 0;
-                    if (out_count == OUT_FEATURES - 1)
-                        out_count <= 0;
-                    else
-                        out_count <= out_count + 1;
-                end else begin
-                    acc <= acc + ($signed(in_data) * $signed(weight_rom[out_count * IN_FEATURES + in_count]));
-                    in_count <= in_count + 1;
+            out_valid <= 0; // Default to not valid
+            case (state)
+                0: begin // Capture Input Vector
+                    if (in_valid) begin
+                        input_buffer[in_count] <= in_data;
+                        if (in_count == IN_FEATURES - 1) begin
+                            state <= 1;
+                            in_count <= 0; // Reset for next capture
+                            // Also reset processing counters for the new vector
+                            out_feat_count <= 0;
+                            mac_count <= 0;
+                            acc <= 0; // Reset accumulator for first MAC
+                        end else begin
+                            in_count <= in_count + 1;
+                        end
+                    end
                 end
-            end
+                
+                1: begin // Sequential MAC for each OUT_FEATURE
+                    // Perform MAC operation
+                    acc <= acc + $signed(input_buffer[mac_count]) * $signed(weight_rom[out_feat_count * IN_FEATURES + mac_count]);
+                    
+                    if (mac_count == IN_FEATURES - 1) begin
+                        // This is the last MAC for the current output feature
+                        // The 'acc' register holds the sum of the previous IN_FEATURES-1 products.
+                        // The final product is added here to form the complete sum.
+                        out_data <= acc + $signed(input_buffer[mac_count]) * $signed(weight_rom[out_feat_count * IN_FEATURES + mac_count]);
+                        out_valid <= 1;
+                        acc <= 0; // Reset accumulator for the next output feature
+                        mac_count <= 0; // Reset MAC counter for the next output feature
+                        
+                        if (out_feat_count == OUT_FEATURES - 1) begin
+                            // All output features calculated for the current input vector
+                            out_feat_count <= 0; // Reset for next input vector
+                            state <= 0; // Ready for next input vector capture
+                        end else begin
+                            out_feat_count <= out_feat_count + 1; // Move to the next output feature
+                        end
+                    end else begin
+                        mac_count <= mac_count + 1; // Continue MACs for the current output feature
+                    end
+                end
+                default: begin // Should not happen
+                    state <= 0;
+                    acc <= 0;
+                    in_count <= 0;
+                    out_feat_count <= 0;
+                    mac_count <= 0;
+                end
+            endcase
         end
     end
 
